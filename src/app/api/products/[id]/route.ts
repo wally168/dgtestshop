@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { isSameOrigin, requireAdminSession } from '@/lib/auth'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { response } = await requireAdminSession(request)
+    if (response) return response
+
     const { id } = await params
     const product = await db.product.findUnique({
       where: {
@@ -13,6 +17,7 @@ export async function GET(
       },
       include: {
         category: true,
+        brandRelation: true,
       },
     })
 
@@ -56,6 +61,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isSameOrigin(request)) {
+      return NextResponse.json({ error: '非法来源' }, { status: 403 })
+    }
+    const { response } = await requireAdminSession(request)
+    if (response) return response
+
     const { id } = await params
     const body = await request.json()
     const {
@@ -71,16 +82,33 @@ export async function PUT(
       featured,
       inStock,
       brand,
+      brandId,
       upc,
       publishedAt,
       variants,
       variantImageMap,
       variantOptionImages,
       variantOptionLinks,
+      youtubeUrl,
+      youtubeIndex,
       // 新增字段：前台按钮显示控制
       showBuyOnAmazon,
       showAddToCart,
     } = body
+
+    const normalizedYoutubeUrl = typeof youtubeUrl === 'string' && youtubeUrl.trim() ? youtubeUrl.trim() : null
+    const imageList = Array.isArray(images) ? images.filter((s: string) => s && s.trim() !== '') : []
+    const normalizedYoutubeIndex = (() => {
+      if (!normalizedYoutubeUrl) return null
+      const raw = typeof youtubeIndex === 'number'
+        ? youtubeIndex
+        : typeof youtubeIndex === 'string'
+          ? parseInt(youtubeIndex, 10)
+          : NaN
+      const fallback = Math.min(1, imageList.length)
+      if (!Number.isFinite(raw)) return fallback
+      return Math.max(0, Math.min(raw, imageList.length))
+    })()
 
     const updateData: any = {
       title: name,
@@ -88,15 +116,18 @@ export async function PUT(
       description: longDescription || description || '',
       price: parseFloat(price),
       originalPrice: originalPrice ? parseFloat(originalPrice) : null,
-      mainImage: Array.isArray(images) && images.length > 0 ? images[0] : undefined,
-      images: JSON.stringify(images || []),
+      mainImage: imageList.length > 0 ? imageList[0] : undefined,
+      images: JSON.stringify(imageList),
+      youtubeUrl: normalizedYoutubeUrl,
+      youtubeIndex: normalizedYoutubeIndex,
       bulletPoints: JSON.stringify(bulletPoints || []),
       amazonUrl,
       categoryId: categoryId || undefined,
       featured: featured || false,
       active: inStock !== false,
-      brand: brand ?? undefined,
-      upc: upc ?? undefined,
+      brand: brand === '' ? null : brand,
+      brandId: brandId === '' ? null : brandId,
+      upc: upc === '' ? null : upc,
       publishedAt: publishedAt ? new Date(publishedAt) : undefined,
       variants: (() => {
         try {
@@ -202,7 +233,20 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isSameOrigin(request)) {
+      return NextResponse.json({ error: '非法来源' }, { status: 403 })
+    }
+    const { response } = await requireAdminSession(request)
+    if (response) return response
+
     const { id } = await params
+    // Delete related reviews first (cascade delete logic)
+    await db.productReview.deleteMany({
+      where: {
+        productId: id,
+      },
+    })
+
     await db.product.delete({
       where: {
         id,

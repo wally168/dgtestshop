@@ -1,9 +1,9 @@
+export const revalidate = 3600;
+
 import Layout from '@/components/Layout'
 import ProductDetailClient from '@/components/ProductDetailClient'
 import { db } from '@/lib/db'
 import Link from 'next/link'
-import { formatPrice } from '@/lib/utils'
-import type { ProductReview } from '@prisma/client'
 
 function parseJson<T>(s: string | null | undefined, fallback: T): T {
   try { return s ? JSON.parse(s) as T : fallback } catch { return fallback }
@@ -32,7 +32,10 @@ export default async function ProductDetail({ params }: { params: Promise<{ slug
     try {
       return await db.product.findUnique({
         where: { slug },
-        include: { category: true },
+        include: { 
+          category: true,
+          brandRelation: true
+        },
       })
     } catch (e) {
       console.error('Failed to load product:', e)
@@ -40,7 +43,7 @@ export default async function ProductDetail({ params }: { params: Promise<{ slug
     }
   })()
 
-  if (!product) {
+  if (!product || !product.active) {
     return (
       <Layout>
         <div className="max-w-3xl mx-auto px-4 py-16">
@@ -59,9 +62,12 @@ export default async function ProductDetail({ params }: { params: Promise<{ slug
   const bullets = Array.isArray(parsedBullets) ? parsedBullets : []
 
   type VariantGroup = { name: string; options: string[] }
-  const brand = product.brand ?? null
+  // 优先使用关联品牌的名称，回退到旧字段
+  const brand = (product as any).brandRelation?.name ?? product.brand ?? null
   const upc = product.upc ?? null
   const publishedAt = product.publishedAt ?? null
+  const youtubeUrl = (product as { youtubeUrl?: string | null }).youtubeUrl ?? null
+  const youtubeIndex = (product as { youtubeIndex?: number | null }).youtubeIndex ?? null
   const variantGroups = parseJson<VariantGroup[]>(product.variants, [])
   const variantImageMap = (() => {
     try {
@@ -125,6 +131,8 @@ export default async function ProductDetail({ params }: { params: Promise<{ slug
             originalPrice={product.originalPrice ?? null}
             images={images}
             mainImage={product.mainImage}
+            youtubeUrl={youtubeUrl}
+            youtubeIndex={youtubeIndex}
             bullets={bullets}
             variantGroups={Array.isArray(variantGroups) ? variantGroups : []}
             variantImageMap={variantImageMap}

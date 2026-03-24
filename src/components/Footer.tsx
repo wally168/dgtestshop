@@ -87,8 +87,8 @@ export default function Footer({ initialNavItems = [] }: { initialNavItems?: Nav
                         className={`md:hidden object-contain ${
                           (settings.logoWidth && settings.logoWidth !== 'auto') || 
                           (settings.logoHeight && settings.logoHeight !== 'auto') 
-                            ? 'max-h-14 w-auto max-w-[200px]' 
-                            : 'max-h-14 w-auto max-w-[200px]'
+                            ? 'max-h-12 w-auto max-w-[180px]' 
+                            : 'max-h-12 w-auto max-w-[180px]'
                         }`}
                         style={
                           (settings.logoWidth && settings.logoWidth !== 'auto') || 
@@ -107,8 +107,8 @@ export default function Footer({ initialNavItems = [] }: { initialNavItems?: Nav
                         className={`hidden md:block object-contain ${
                           (settings.logoWidth && settings.logoWidth !== 'auto') || 
                           (settings.logoHeight && settings.logoHeight !== 'auto') 
-                            ? 'max-w-full max-h-16' 
-                            : 'max-w-full max-h-16'
+                            ? 'max-w-full' 
+                            : 'max-w-full'
                         }`}
                         style={
                           (settings.logoWidth && settings.logoWidth !== 'auto') || 

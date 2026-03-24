@@ -1,9 +1,10 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter, useParams } from 'next/navigation'
 import useUnsavedChangesPrompt from '../../../../../hooks/useUnsavedChangesPrompt'
+import * as XLSX from 'xlsx'
 import { 
   ArrowLeft, 
   Save, 
@@ -15,7 +16,8 @@ import {
   Package,
   Home,
   Loader2,
-  Trash2
+  Trash2,
+  FileText
 } from 'lucide-react'
 
 interface Product {
@@ -27,7 +29,10 @@ interface Product {
   images: string[]
   bulletPoints: string[]
   amazonUrl: string
+  youtubeUrl?: string
+  youtubeIndex?: number | null
   categoryId?: string
+  brandId?: string
   featured: boolean
   inStock: boolean
   brand?: string
@@ -47,7 +52,10 @@ interface ProductForm {
   images: string[]
   bulletPoints: string[]
   amazonUrl: string
+  youtubeUrl: string
+  youtubeIndex?: number | null
   categoryId: string
+  brandId: string
   featured: boolean
   inStock: boolean
   showBuyOnAmazon: boolean
@@ -65,6 +73,7 @@ interface VariantGroup { name: string; options: string[] }
 
 // 新增：分类类型
 interface Category { id: string; name: string; slug: string }
+interface Brand { id: string; name: string; slug: string }
 
 interface Review {
   id: string
@@ -88,6 +97,30 @@ function isValidAmazonUrl(url: string): boolean {
   } catch {
     return false
   }
+}
+function extractYoutubeId(value: string): string | null {
+  if (!value || typeof value !== 'string') return null
+  try {
+    const url = new URL(value)
+    const host = url.hostname.replace(/^www\./, '')
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0]
+      return id || null
+    }
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (url.pathname === '/watch') {
+        return url.searchParams.get('v')
+      }
+      const parts = url.pathname.split('/').filter(Boolean)
+      const embedIndex = parts.findIndex(p => p === 'embed' || p === 'shorts')
+      if (embedIndex >= 0 && parts[embedIndex + 1]) return parts[embedIndex + 1]
+    }
+  } catch {}
+  return null
+}
+function isValidYoutubeUrl(url: string): boolean {
+  if (!url || !url.trim()) return true
+  return !!extractYoutubeId(url)
 }
 
 const COMBO_KEY = '__combo__'
@@ -132,6 +165,8 @@ export default function EditProduct() {
   const router = useRouter()
   const params = useParams()
   const productId = params.id as string
+  const MAX_IMAGE_BYTES = 4 * 1024 * 1024
+  const tooLargeMessage = '上传失败：图片不能大于4MB'
 
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(true)
@@ -142,9 +177,12 @@ export default function EditProduct() {
     price: '',
     originalPrice: '',
     images: [''],
-    bulletPoints: ['', '', '', '', ''],
+    bulletPoints: ['', '', '', '', '', '', '', ''],
     amazonUrl: '',
+    youtubeUrl: '',
+    youtubeIndex: null,
     categoryId: '',
+    brandId: '',
     featured: false,
     inStock: true,
     showBuyOnAmazon: true,
@@ -160,7 +198,9 @@ export default function EditProduct() {
   // 新增：分类状态
   const [categories, setCategories] = useState<Category[]>([])
   const [catLoading, setCatLoading] = useState(true)
+  const [brands, setBrands] = useState<Brand[]>([])
   const [urlError, setUrlError] = useState<string>('')
+  const [youtubeUrlError, setYoutubeUrlError] = useState<string>('')
   // 上传状态：按索引标记（简化处理）
   const [uploadingIndex, setUploadingIndex] = useState<number | null>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
@@ -169,9 +209,80 @@ export default function EditProduct() {
   const [hasChanges, setHasChanges] = useState(false)
   useUnsavedChangesPrompt(hasChanges)
 
+  // 描述图片上传
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const [descUploading, setDescUploading] = useState(false)
+
+  const handleDescImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > MAX_IMAGE_BYTES) {
+      alert(tooLargeMessage)
+      e.target.value = ''
+      return
+    }
+
+    setDescUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      if (!res.ok) {
+        if (res.status === 413) throw new Error(tooLargeMessage)
+        throw new Error(`HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      const url = data?.url
+      
+      if (typeof url === 'string' && url.length > 0) {
+        const finalUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`
+        const imgTag = `<img src="${finalUrl}" alt="Description Image" style="max-width: 100%; height: auto;" />`
+        
+        setForm(prev => {
+          const textarea = descTextareaRef.current
+          let newDesc = prev.description
+          
+          if (textarea) {
+            const start = textarea.selectionStart
+            const end = textarea.selectionEnd
+            newDesc = prev.description.substring(0, start) + imgTag + prev.description.substring(end)
+          } else {
+            newDesc = prev.description + imgTag
+          }
+          
+          return { ...prev, description: newDesc }
+        })
+        setHasChanges(true)
+      } else {
+        alert('上传成功，但未返回有效URL')
+      }
+    } catch (e) {
+      console.error('上传描述图片失败:', e)
+      alert((e instanceof Error && e.message === tooLargeMessage) ? tooLargeMessage : '上传图片失败，请重试')
+    } finally {
+      setDescUploading(false)
+      e.target.value = ''
+    }
+  }
+
   const [reviews, setReviews] = useState<Review[]>([])
   const [loadingReviews, setLoadingReviews] = useState(true)
   const [editingReview, setEditingReview] = useState<Review | null>(null)
+  const [reviewImportFile, setReviewImportFile] = useState<File | null>(null)
+  const [reviewImporting, setReviewImporting] = useState(false)
+  const [reviewImportResult, setReviewImportResult] = useState<{ success: number; failed: number; skipped: number; errors: string[] } | null>(null)
+  const [reviewImportVisible, setReviewImportVisible] = useState(true)
+  const [reviewImportPreview, setReviewImportPreview] = useState<Array<{
+    title: string
+    content: string
+    rating: number | null
+    name: string
+    country: string
+    images: string[]
+    createdAt?: string
+    willImport: boolean
+    reason: string
+  }>>([])
   const [newReview, setNewReview] = useState<Review>({
     id: '',
     productId: productId,
@@ -212,12 +323,19 @@ export default function EditProduct() {
     )
   }
   const handleUpload = async (index: number, file: File) => {
+    if (file.size > MAX_IMAGE_BYTES) {
+      alert(tooLargeMessage)
+      return
+    }
     setUploadingIndex(index)
     try {
       const fd = new FormData()
       fd.append('file', file)
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        if (res.status === 413) throw new Error(tooLargeMessage)
+        throw new Error(`HTTP ${res.status}`)
+      }
       const data = await res.json()
       const url = data?.url
       if (typeof url === 'string' && url.length > 0) {
@@ -229,7 +347,7 @@ export default function EditProduct() {
       }
     } catch (e) {
       console.error('上传失败:', e)
-      alert('上传失败，请稍后重试')
+      alert((e instanceof Error && e.message === tooLargeMessage) ? tooLargeMessage : '上传失败，请稍后重试')
     } finally {
       setUploadingIndex(null)
     }
@@ -237,6 +355,10 @@ export default function EditProduct() {
 
   const handleBulkUpload = async (files: FileList) => {
     if (!files || files.length === 0) return
+    if (Array.from(files).some(f => f.size > MAX_IMAGE_BYTES)) {
+      alert(tooLargeMessage)
+      return
+    }
     setBulkUploading(true)
     try {
       const urls: string[] = []
@@ -244,7 +366,10 @@ export default function EditProduct() {
         const fd = new FormData()
         fd.append('file', file)
         const res = await fetch('/api/upload', { method: 'POST', body: fd })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) {
+          if (res.status === 413) throw new Error(tooLargeMessage)
+          throw new Error(`HTTP ${res.status}`)
+        }
         const data = await res.json()
         const url = data?.url
         if (typeof url === 'string' && url.length > 0) {
@@ -259,7 +384,7 @@ export default function EditProduct() {
       setHasChanges(true)
     } catch (e) {
       console.error('批量上传失败:', e)
-      alert('批量上传失败，请稍后重试')
+      alert((e instanceof Error && e.message === tooLargeMessage) ? tooLargeMessage : '批量上传失败，请稍后重试')
     } finally {
       setBulkUploading(false)
     }
@@ -280,34 +405,44 @@ export default function EditProduct() {
     setHasChanges(true)
   }
 
+  // 新增：加载分类和品牌列表
   useEffect(() => {
-    fetchProduct()
-  }, [productId])
-
-  // 新增：加载分类列表
-  useEffect(() => {
-    const loadCategories = async () => {
+    const loadData = async () => {
       try {
-        const res = await fetch('/api/categories', { cache: 'no-store' })
-        if (res.ok) {
-          const data = await res.json()
-          setCategories(Array.isArray(data) ? data : [])
+        const [catRes, brandRes] = await Promise.all([
+          fetch('/api/categories', { cache: 'no-store' }),
+          fetch('/api/brands', { cache: 'no-store' })
+        ])
+        if (catRes.ok) {
+          const data = await catRes.json()
+          const normalized = Array.isArray(data)
+            ? data.map((c: any) => ({ ...c, id: String(c?.id ?? '') })).filter((c: any) => c.id)
+            : []
+          setCategories(normalized)
+        }
+        if (brandRes.ok) {
+          const data = await brandRes.json()
+          const normalized = Array.isArray(data)
+            ? data.map((b: any) => ({ ...b, id: String(b?.id ?? '') })).filter((b: any) => b.id)
+            : []
+          setBrands(normalized)
         }
       } catch (e) {
-        console.error('加载分类失败:', e)
+        console.error('加载基础数据失败:', e)
       } finally {
         setCatLoading(false)
       }
     }
-    loadCategories()
+    loadData()
   }, [])
 
-  const fetchProduct = async () => {
+  const fetchProduct = useCallback(async () => {
     try {
       const response = await fetch(`/api/products/${productId}`)
       if (response.ok) {
         const data = await response.json()
         setProduct(data)
+        const toId = (v: any): string => (v === null || v === undefined) ? '' : String(v)
         
         const toLocalInput = (dt: string | Date | null | undefined): string => {
           if (!dt) return ''
@@ -325,10 +460,13 @@ export default function EditProduct() {
           originalPrice: data.originalPrice?.toString() || '',
           images: Array.isArray(data.images) && data.images.length > 0 ? data.images : [''],
           bulletPoints: Array.isArray(data.bulletPoints)
-            ? Array.from({ length: 5 }, (_, i) => (data.bulletPoints[i] ?? ''))
-            : ['', '', '', '', ''],
+            ? Array.from({ length: 8 }, (_, i) => (data.bulletPoints[i] ?? ''))
+            : ['', '', '', '', '', '', '', ''],
           amazonUrl: data.amazonUrl || '',
-          categoryId: data.categoryId || '',
+          youtubeUrl: (data as any).youtubeUrl || '',
+          youtubeIndex: typeof (data as any).youtubeIndex === 'number' ? (data as any).youtubeIndex : null,
+          categoryId: toId(data.categoryId),
+          brandId: toId(data.brandId || data.brandRelation?.id),
           featured: data.featured || false,
           inStock: data.inStock !== false,
           showBuyOnAmazon: data.showBuyOnAmazon !== false,
@@ -352,43 +490,188 @@ export default function EditProduct() {
     } finally {
       setFetching(false)
     }
-  }
+  }, [productId, router])
 
   useEffect(() => {
-    const loadReviews = async () => {
-      try {
-        const res = await fetch(`/api/products/${productId}/reviews?visibleOnly=0`, { cache: 'no-store' })
-        if (res.ok) {
-          const data = await res.json()
-          const normalized = Array.isArray(data) ? data.map((r: any) => ({
-            id: String(r.id),
-            productId: String(r.productId),
-            isVisible: Boolean(r.isVisible),
-            country: String(r.country || ''),
-            name: String(r.name || ''),
-            title: String(r.title || ''),
-            content: String(r.content || ''),
-            rating: Number(r.rating || 5),
-            images: Array.isArray(r.images) ? r.images : [],
-            createdAt: (() => {
-              try {
-                if (!r.createdAt) return ''
-                const d = new Date(r.createdAt)
-                const pad = (n: number) => String(n).padStart(2, '0')
-                return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-              } catch { return '' }
-            })()
-          })) : []
-          setReviews(normalized)
-        }
-      } catch (e) {
-        console.error('加载评论失败:', e)
-      } finally {
-        setLoadingReviews(false)
+    fetchProduct()
+  }, [fetchProduct])
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/products/${productId}/reviews?visibleOnly=0`, { cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        const normalized = Array.isArray(data) ? data.map((r: any) => ({
+          id: String(r.id),
+          productId: String(r.productId),
+          isVisible: Boolean(r.isVisible),
+          country: String(r.country || ''),
+          name: String(r.name || ''),
+          title: String(r.title || ''),
+          content: String(r.content || ''),
+          rating: Number(r.rating || 5),
+          images: Array.isArray(r.images) ? r.images : [],
+          createdAt: (() => {
+            try {
+              if (!r.createdAt) return ''
+              const d = new Date(r.createdAt)
+              const pad = (n: number) => String(n).padStart(2, '0')
+              return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+            } catch { return '' }
+          })()
+        })) : []
+        setReviews(normalized)
       }
+    } catch (e) {
+      console.error('加载评论失败:', e)
+    } finally {
+      setLoadingReviews(false)
     }
-    loadReviews()
   }, [productId])
+
+  useEffect(() => {
+    loadReviews()
+  }, [loadReviews])
+
+  const parseExcelDateToIso = (value: any): string | undefined => {
+    if (!value) return undefined
+    if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString()
+    if (typeof value === 'number') {
+      const parsed = XLSX.SSF.parse_date_code(value)
+      if (!parsed) return undefined
+      const d = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d, parsed.H || 0, parsed.M || 0, parsed.S || 0))
+      if (!isNaN(d.getTime())) return d.toISOString()
+      return undefined
+    }
+    if (typeof value === 'string') {
+      const d = new Date(value)
+      if (!isNaN(d.getTime())) return d.toISOString()
+    }
+    return undefined
+  }
+
+  const parseRatingValue = (value: any): number | null => {
+    if (value === null || value === undefined) return null
+    if (typeof value === 'number' && !isNaN(value)) return value
+    const str = String(value).trim()
+    if (!str) return null
+    const match = str.match(/(\d+(\.\d+)?)/)
+    if (!match) return null
+    const num = Number(match[1])
+    return isNaN(num) ? null : num
+  }
+
+  const parseImagesValue = (value: any): string[] => {
+    if (!value) return []
+    if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean)
+    if (typeof value === 'string') {
+      const str = value.trim()
+      if (!str) return []
+      if (str.startsWith('[')) {
+        try {
+          const arr = JSON.parse(str)
+          if (Array.isArray(arr)) return arr.map(v => String(v).trim()).filter(Boolean)
+        } catch {}
+      }
+      return str.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean)
+    }
+    return [String(value).trim()].filter(Boolean)
+  }
+
+  const buildReviewImportPreview = (rows: Record<string, any>[]) => {
+    const preview = rows.map((row) => {
+      const title = String(row['标题'] ?? row['title'] ?? row['Title'] ?? '').trim()
+      const content = String(row['内容'] ?? row['content'] ?? row['Content'] ?? '').trim()
+      const ratingValue = parseRatingValue(row['星级'] ?? row['rating'] ?? row['Rating'])
+      const name = String(row['评论人'] ?? row['name'] ?? row['Name'] ?? '').trim()
+      const country = String(row['所属国家'] ?? row['country'] ?? row['Country'] ?? '').trim()
+      const images = parseImagesValue(row['图片地址'] ?? row['images'] ?? row['Images'])
+      const createdAt = parseExcelDateToIso(row['评论时间'] ?? row['time'] ?? row['Time'] ?? row['created_at'] ?? row['CreatedAt'])
+      const isFive = ratingValue === 5
+      const hasContent = Boolean(content)
+      const willImport = isFive && hasContent
+      let reason = ''
+      if (!isFive) reason = '非5星'
+      else if (!hasContent) reason = '内容为空'
+      return { title, content, rating: ratingValue, name, country, images, createdAt, willImport, reason }
+    })
+    setReviewImportPreview(preview)
+    return preview
+  }
+
+  const parseReviewImportFile = async (file: File) => {
+    const buffer = await file.arrayBuffer()
+    const workbook = XLSX.read(buffer, { type: 'array' })
+    const sheetName = workbook.SheetNames[0]
+    const worksheet = workbook.Sheets[sheetName]
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, any>[]
+    return buildReviewImportPreview(jsonData)
+  }
+
+  const handleReviewImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setReviewImportFile(file)
+    setReviewImportResult(null)
+    parseReviewImportFile(file).catch(() => {
+      setReviewImportPreview([])
+      setReviewImportResult({ success: 0, failed: 0, skipped: 0, errors: ['解析失败或文件损坏'] })
+    })
+  }
+
+  const handleImportReviews = async () => {
+    if (!reviewImportFile || reviewImporting) return
+    setReviewImporting(true)
+    setReviewImportResult(null)
+    try {
+      const preview = reviewImportPreview.length > 0 ? reviewImportPreview : await parseReviewImportFile(reviewImportFile)
+      let success = 0
+      let failed = 0
+      let skipped = 0
+      const errors: string[] = []
+
+      for (const row of preview) {
+        if (!row.willImport) {
+          skipped++
+          continue
+        }
+        try {
+          const payload = {
+            isVisible: reviewImportVisible,
+            country: row.country,
+            name: row.name,
+            title: row.title,
+            content: row.content,
+            rating: 5,
+            images: row.images,
+            createdAt: row.createdAt
+          }
+          const res = await fetch(`/api/products/${productId}/reviews`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+          if (res.ok) {
+            success++
+          } else {
+            failed++
+            const err = await res.json().catch(() => ({}))
+            errors.push(err.error || '导入失败')
+          }
+        } catch (e) {
+          failed++
+          errors.push('导入失败')
+        }
+      }
+
+      setReviewImportResult({ success, failed, skipped, errors })
+      await loadReviews()
+    } catch (e) {
+      setReviewImportResult({ success: 0, failed: 0, skipped: 0, errors: ['解析失败或文件损坏'] })
+    } finally {
+      setReviewImporting(false)
+    }
+  }
 
   const addReviewImageField = (isEdit: boolean) => {
     if (isEdit && editingReview) {
@@ -416,10 +699,17 @@ export default function EditProduct() {
 
   const uploadReviewImage = async (index: number, file: File, isEdit: boolean) => {
     try {
+      if (file.size > MAX_IMAGE_BYTES) {
+        alert(tooLargeMessage)
+        return
+      }
       const fd = new FormData()
       fd.append('file', file)
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        if (res.status === 413) throw new Error(tooLargeMessage)
+        throw new Error(`HTTP ${res.status}`)
+      }
       const data = await res.json()
       const url = data?.url
       if (typeof url === 'string' && url.length > 0) {
@@ -428,7 +718,7 @@ export default function EditProduct() {
       }
     } catch (e) {
       console.error('上传失败:', e)
-      alert('上传失败，请稍后重试')
+      alert((e instanceof Error && e.message === tooLargeMessage) ? tooLargeMessage : '上传失败，请稍后重试')
     }
   }
 
@@ -522,8 +812,18 @@ export default function EditProduct() {
       setLoading(false)
       return
     }
+    if (!isValidYoutubeUrl(form.youtubeUrl)) {
+      setYoutubeUrlError('请输入有效的 YouTube 链接')
+      setLoading(false)
+      return
+    }
 
     try {
+      const imageList = (Array.isArray(form.images) ? form.images : ['']).filter(img => img.trim() !== '')
+      const safeYoutubeIndex = (() => {
+        if (typeof form.youtubeIndex !== 'number' || !Number.isFinite(form.youtubeIndex)) return null
+        return Math.max(0, Math.min(form.youtubeIndex, imageList.length))
+      })()
       const response = await fetch(`/api/products/${productId}`, {
         method: 'PUT',
         headers: {
@@ -532,10 +832,12 @@ export default function EditProduct() {
         body: JSON.stringify({
           ...form,
           amazonUrl: form.amazonUrl,
+          youtubeUrl: (form.youtubeUrl ?? '').trim() || null,
+          youtubeIndex: safeYoutubeIndex,
           price: parseFloat(form.price),
           originalPrice: form.originalPrice ? parseFloat(form.originalPrice) : null,
-          images: (Array.isArray(form.images) ? form.images : ['']).filter(img => img.trim() !== ''),
-          bulletPoints: Array.from({ length: 5 }, (_, i) => ((Array.isArray(form.bulletPoints) ? form.bulletPoints[i] : '') ?? '').trim()),
+          images: imageList,
+          bulletPoints: Array.from({ length: 8 }, (_, i) => ((Array.isArray(form.bulletPoints) ? form.bulletPoints[i] : '') ?? '').trim()),
           brand: (form.brand ?? '').trim() || null,
           upc: (form.upc ?? '').trim() || null,
           publishedAt: form.publishedAt ? new Date(form.publishedAt).toISOString() : null,
@@ -599,6 +901,9 @@ export default function EditProduct() {
     }))
     setHasChanges(true)
   }
+
+  const reviewImportableCount = reviewImportPreview.filter((r) => r.willImport).length
+  const reviewSkippedCount = reviewImportPreview.length - reviewImportableCount
 
   if (fetching) {
     return (
@@ -679,19 +984,6 @@ export default function EditProduct() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  品牌名
-                </label>
-                <input
-                  type="text"
-                  value={form.brand || ''}
-                  onChange={(e) => setForm(prev => ({ ...prev, brand: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="例如：Apple、Sony、Nike"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
                   UPC（可选）
                 </label>
                 <input
@@ -734,6 +1026,41 @@ export default function EditProduct() {
                 </select>
                 {!catLoading && categories.length === 0 && (
                   <p className="text-xs text-red-600 mt-1">暂无分类，请先执行重置数据或在数据库中创建分类。</p>
+                )}
+              </div>
+
+              {/* 新增：品牌选择 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  所属品牌 (可选)
+                </label>
+                <select
+                  value={form.brandId || ''}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    const selected = brands.find(b => String(b.id) === val)
+                    setForm(prev => {
+                      if (!val) {
+                         return { ...prev, brandId: '', brand: '' }
+                      }
+                      return { 
+                        ...prev, 
+                        brandId: val,
+                        brand: selected ? selected.name : ''
+                      }
+                    })
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">-- 不选择品牌 --</option>
+                  {brands.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+                {!form.brandId && form.brand && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    当前保留的旧品牌名称：{form.brand}。请在上方选择对应品牌以关联（建议）。
+                  </p>
                 )}
               </div>
 
@@ -1216,7 +1543,48 @@ export default function EditProduct() {
               </div>
             </div>
 
-            <p className="text-xs text-gray-500 mb-2">提示：按住图片行拖拽进行排序</p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                YouTube 播放链接 <span className="text-gray-400 font-normal">(可选)</span>
+              </label>
+              <input
+                type="url"
+                value={form.youtubeUrl}
+                onChange={(e) => {
+                  setForm(prev => ({ ...prev, youtubeUrl: e.target.value }))
+                  if (youtubeUrlError) setYoutubeUrlError('')
+                }}
+                placeholder="https://youtu.be/xxxx 或 https://www.youtube.com/watch?v=xxxx"
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${youtubeUrlError ? 'border-red-500' : 'border-gray-300'}`}
+              />
+              {youtubeUrlError ? (
+                <p className="text-xs text-red-600 mt-1">{youtubeUrlError}</p>
+              ) : (
+                <p className="text-xs text-gray-500 mt-1">提供后可设置插入位置</p>
+              )}
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                视频插入位置 <span className="text-gray-400 font-normal">(可选)</span>
+              </label>
+              <select
+                value={typeof form.youtubeIndex === 'number' && Number.isFinite(form.youtubeIndex) ? Math.max(0, Math.min(form.youtubeIndex, form.images.length)) : Math.min(1, form.images.length)}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10)
+                  setForm(prev => ({ ...prev, youtubeIndex: Number.isFinite(v) ? v : null }))
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {Array.from({ length: Math.max(1, form.images.length) + 1 }, (_, i) => (
+                  <option key={i} value={i}>
+                    第 {i + 1} 位
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">第 1 位表示最前面，最后一位表示图片列表末尾</p>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-2">提示：按住图片行拖拽进行排序；支持最大 4MB 图片上传</p>
 
             <div className="space-y-4">
               {form.images.map((image, index) => (
@@ -1287,15 +1655,15 @@ export default function EditProduct() {
             </div>
           </div>
 
-          {/* 产品要点 (5点) */}
+          {/* 产品要点 (8点) */}
           <div className="bg-white p-6 rounded-xl shadow-sm border">
-            <h2 className="text-lg font-semibold text-gray-900 mb-6">产品要点 (5点描述)</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-6">产品要点 (8点描述)</h2>
             
             <div className="space-y-4">
               {form.bulletPoints.map((point, index) => (
                 <div key={index}>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    要点 {index + 1} <span className="text-xs text-gray-500">(最多500字符)</span>
+                    要点 {index + 1} {index >= 5 && <span className="text-gray-400 font-normal">(可选)</span>} <span className="text-xs text-gray-500">(最多500字符)</span>
                   </label>
                   <input
                     type="text"
@@ -1303,7 +1671,7 @@ export default function EditProduct() {
                     value={point}
                     onChange={(e) => updateBulletPoint(index, e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder={`输入第${index + 1}个产品要点`}
+                    placeholder={index >= 5 ? `(可选) 输入第${index + 1}个产品要点` : `输入第${index + 1}个产品要点`}
                   />
                   <div className="text-xs text-gray-500 mt-1">
                     {point.length}/500 字符
@@ -1318,11 +1686,25 @@ export default function EditProduct() {
             <h2 className="text-lg font-semibold text-gray-900 mb-6">产品描述</h2>
             
             <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                详细描述 * <span className="text-xs text-gray-500">(最多3000字符，支持HTML)</span>
-              </label>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  详细描述 * <span className="text-xs text-gray-500">(最多3000字符，支持HTML，视频插入：直接粘贴 YouTube 链接即可)</span>
+                </label>
+                <label className="cursor-pointer inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors">
+                  <Upload className={`h-4 w-4 mr-2 ${descUploading ? 'animate-pulse' : ''}`} />
+                  {descUploading ? '上传中...' : '插入图片 (Max 4MB)'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleDescImageUpload}
+                    disabled={descUploading}
+                  />
+                </label>
+              </div>
               <textarea
-                required
+              ref={descTextareaRef}
+              required
                 rows={12}
                 maxLength={3000}
                 value={form.description}
@@ -1349,6 +1731,107 @@ export default function EditProduct() {
               >
                 <Plus className="h-4 w-4 mr-1" /> 添加评论
               </button>
+            </div>
+
+            <div className="border rounded-lg p-4 mb-4 bg-gray-50">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <FileText className="h-5 w-5 text-gray-500" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-700">表格导入评论（仅导入 5 星）</div>
+                    <div className="text-xs text-gray-500">字段：标题、内容、星级、图片地址、评论人、所属国家、评论时间</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="inline-flex items-center px-3 py-2 text-sm bg-white border rounded-lg cursor-pointer hover:bg-gray-100">
+                    选择文件
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      onChange={handleReviewImportFileChange}
+                      disabled={reviewImporting}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleImportReviews}
+                    disabled={!reviewImportFile || reviewImporting}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                  >
+                    {reviewImporting ? '导入中…' : '开始导入'}
+                  </button>
+                </div>
+              </div>
+              {reviewImportFile && (
+                <div className="text-xs text-gray-600 mt-2">已选择：{reviewImportFile.name}</div>
+              )}
+              <div className="mt-3 flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={reviewImportVisible}
+                  onChange={(e) => setReviewImportVisible(e.target.checked)}
+                />
+                <span>导入后显示在前台</span>
+              </div>
+              {reviewImportPreview.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-xs text-gray-600 mb-2">
+                    预览：共 {reviewImportPreview.length} 条，预计导入 {reviewImportableCount} 条，跳过 {reviewSkippedCount} 条
+                  </div>
+                  <div className="overflow-x-auto border rounded-lg bg-white">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">标题</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">内容</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">星级</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">图片</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">评论人</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">国家</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">时间</th>
+                          <th className="text-left px-3 py-2 text-gray-600 font-medium">结果</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reviewImportPreview.slice(0, 20).map((row, i) => (
+                          <tr key={`${row.title}-${i}`} className="border-t">
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{row.title || '-'}</td>
+                            <td className="px-3 py-2 text-gray-700 max-w-[240px]">
+                              {(row.content || '').length > 30 ? `${row.content.slice(0, 30)}…` : (row.content || '-')}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{row.rating ?? '-'}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{row.images.length}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{row.name || '-'}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{row.country || '-'}</td>
+                            <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
+                              {row.createdAt ? row.createdAt.replace('T', ' ').slice(0, 16) : '-'}
+                            </td>
+                            <td className={`px-3 py-2 whitespace-nowrap ${row.willImport ? 'text-green-600' : 'text-gray-500'}`}>
+                              {row.willImport ? '将导入' : `跳过${row.reason ? `：${row.reason}` : ''}`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {reviewImportPreview.length > 20 && (
+                    <div className="text-xs text-gray-500 mt-1">仅显示前 20 条预览</div>
+                  )}
+                </div>
+              )}
+              {reviewImportResult && (
+                <div className="mt-3 text-sm text-gray-700">
+                  已导入 {reviewImportResult.success} 条，跳过 {reviewImportResult.skipped} 条，失败 {reviewImportResult.failed} 条
+                </div>
+              )}
+              {reviewImportResult?.errors?.length ? (
+                <div className="mt-2 text-xs text-red-600">
+                  {reviewImportResult.errors.slice(0, 5).map((e, i) => (
+                    <div key={`${e}-${i}`}>{e}</div>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             {loadingReviews ? (

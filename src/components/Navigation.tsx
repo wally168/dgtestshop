@@ -52,6 +52,7 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
 
   // 新增：加载导航数据（如果没有初始数据才显示loading）
   useEffect(() => {
+    if (initialNavItems.length > 0) return
     const load = async () => {
       const shouldShowLoading = initialNavItems.length === 0
       try {
@@ -76,7 +77,7 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
       }
     }
     load()
-  }, [])
+  }, [initialNavItems.length])
 
   // 加载分类用于 Products 下拉
   useEffect(() => {
@@ -114,6 +115,10 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
     return value
   }
 
+  const hasCustomLogoSize =
+    (settings.logoWidth && settings.logoWidth !== 'auto') ||
+    (settings.logoHeight && settings.logoHeight !== 'auto')
+
   return (
     <nav className={`fixed top-0 w-full z-50 transition-all duration-300 ${
       isScrolled 
@@ -124,23 +129,19 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
         <div className="flex items-center min-h-[4rem]">
           {/* 左侧：Logo 保持不变，占用等比空间 */}
           <div className="flex-1">
-            <Link href="/" className="flex items-center space-x-2 group">
-              <div className="relative">
+            <Link href="/" className="flex items-center space-x-2 group min-w-0">
+              <div className="relative shrink-0">
                 {settings.logoUrl ? (
                   <>
-                    {/* 移动端 Logo: 默认 h-8 (32px) 与桌面端保持完全一致 */}
+                    {/* 移动端 Logo: 恢复 object-contain 并参考 Footer 设置 (max-h-12/14) 确保比例正常且不过小 */}
             <img
               src={settings.logoUrl}
               alt={settings.siteName || 'Site Logo'}
-              className={`md:hidden object-contain transition-transform group-hover:scale-105 ${
-                (settings.logoWidth && settings.logoWidth !== 'auto') || 
-                (settings.logoHeight && settings.logoHeight !== 'auto') 
-                  ? 'max-h-14 w-auto max-w-[200px]' 
-                  : 'max-h-14 w-auto max-w-[200px]'
+              className={`md:hidden object-contain shrink-0 transition-transform group-hover:scale-105 ${
+                hasCustomLogoSize ? 'w-auto max-w-[180px]' : 'h-10 w-auto max-w-[180px]'
               }`}
               style={
-                (settings.logoWidth && settings.logoWidth !== 'auto') || 
-                (settings.logoHeight && settings.logoHeight !== 'auto')
+                hasCustomLogoSize
                   ? {
                       width: formatSize(settings.logoWidth),
                       height: formatSize(settings.logoHeight),
@@ -153,15 +154,11 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
             <img
               src={settings.logoUrl}
               alt={settings.siteName || 'Site Logo'}
-              className={`hidden md:block object-contain transition-transform group-hover:scale-105 ${
-                (settings.logoWidth && settings.logoWidth !== 'auto') || 
-                (settings.logoHeight && settings.logoHeight !== 'auto') 
-                  ? 'max-w-full max-h-16' 
-                  : 'max-w-full max-h-16'
+              className={`hidden md:block object-contain shrink-0 transition-transform group-hover:scale-105 ${
+                hasCustomLogoSize ? 'max-w-full' : 'h-8 w-auto max-w-full'
               }`}
               style={
-                (settings.logoWidth && settings.logoWidth !== 'auto') || 
-                (settings.logoHeight && settings.logoHeight !== 'auto')
+                hasCustomLogoSize
                   ? {
                       width: formatSize(settings.logoWidth),
                       height: formatSize(settings.logoHeight),
@@ -178,7 +175,7 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
                   </>
                 )}
               </div>
-              <span className="text-xl font-semibold text-gray-900 tracking-tight">
+              <span className="text-xl font-semibold text-gray-900 tracking-tight truncate">
                 {settings.siteName}
               </span>
             </Link>
@@ -221,7 +218,7 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
           </div>
 
           {/* 右侧：搜索框、购物车入口与移动端菜单按钮 */}
-          <div className="flex-1 flex justify-end items-center gap-2">
+          <div className="flex md:flex-1 justify-end items-center gap-2">
             {/* Search */}
             <form action="/products" method="get" className="hidden md:flex items-center gap-2 bg-gray-100 rounded-lg px-2 py-1">
               <input
@@ -272,11 +269,20 @@ export default function Navigation({ initialNavItems = [] }: { initialNavItems?:
         </div>
 
         {/* Mobile Navigation + 搜索与分类 */}
-        <div className={`md:hidden transition-all duration-300 ease-in-out ${
-          isMenuOpen 
-            ? 'max-h-64 opacity-100' 
-            : 'max-h-0 opacity-0 overflow-hidden'
-        }`}>
+        <div 
+          className={`md:hidden transition-all duration-300 ease-in-out ${
+            isMenuOpen 
+              ? 'max-h-64 opacity-100' 
+              : 'max-h-0 opacity-0 overflow-hidden'
+          }`}
+          style={{
+            // 兼容性兜底：确保在 CSS 加载失败时也能正确隐藏/显示
+            maxHeight: isMenuOpen ? '16rem' : '0',
+            opacity: isMenuOpen ? 1 : 0,
+            overflow: 'hidden',
+            visibility: isMenuOpen ? 'visible' : 'hidden'
+          }}
+        >
           <div className="px-2 pt-2 pb-3 space-y-1 bg-white/95 backdrop-blur-md border-t border-gray-200/50">
             {/* Mobile search */}
             <form action="/products" method="get" className="flex items-center gap-2 bg-gray-100 rounded-lg px-2 py-2 mb-2">

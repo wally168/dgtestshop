@@ -32,17 +32,6 @@ export default async function ProductsPage({ searchParams }: { searchParams?: Pr
     products = []
   }
 
-  // Fetch categories inside the request
-  let categories: Array<{ id: string; name: string }> = []
-  try {
-    categories = await db.category.findMany({ 
-      orderBy: { name: 'asc' }, 
-      select: { id: true, name: true } 
-    })
-  } catch (e) {
-    console.error('Failed to load categories:', e)
-  }
-
   let aggMap: Record<string, { avgRating: number; reviewCount: number }> = {}
   try {
     const ids = products.map((p) => p.id)
@@ -202,4 +191,9 @@ export default async function ProductsPage({ searchParams }: { searchParams?: Pr
     </Layout>
   )
 }
-
+  // 类别列表
+  let categories: Array<{ id: string; name: string }> = []
+  try {
+    const rows = await db.category.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } })
+    categories = rows
+  } catch {}

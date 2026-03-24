@@ -10,6 +10,8 @@ export default function ContactPage() {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
+    country: '',
+    orderNo: '',
     subject: '',
     message: ''
   })
@@ -58,7 +60,7 @@ export default function ContactPage() {
 
       if (response.ok) {
         setSubmitStatus('success')
-        setFormData({ name: '', email: '', subject: '', message: '' })
+        setFormData({ name: '', email: '', country: '', orderNo: '', subject: '', message: '' })
       } else {
         const data = await response.json()
         if (data.error && data.error.includes('valid email')) {
@@ -176,6 +178,38 @@ export default function ContactPage() {
               </div>
 
               <div>
+                <label htmlFor="country" className="block text-sm font-medium leading-6 text-gray-900">
+                  Country
+                </label>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    name="country"
+                    id="country"
+                    value={formData.country}
+                    onChange={handleChange}
+                    className="block w-full rounded-md border-0 px-3.5 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="orderNo" className="block text-sm font-medium leading-6 text-gray-900">
+                  Order No.
+                </label>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    name="orderNo"
+                    id="orderNo"
+                    value={formData.orderNo}
+                    onChange={handleChange}
+                    className="block w-full rounded-md border-0 px-3.5 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                  />
+                </div>
+              </div>
+
+              <div>
                 <label htmlFor="message" className="block text-sm font-medium leading-6 text-gray-900">
                   Message *
                 </label>
@@ -235,38 +269,38 @@ export default function ContactPage() {
 
             {/* Contact Details - Single Row */}
             <div className="mx-auto mt-16 max-w-4xl">
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-12">
-                <div className="flex items-center space-x-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+                <div className="flex items-start sm:items-center gap-3 rounded-xl bg-white p-4 border border-gray-200 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 flex-shrink-0">
                     <Mail className="h-5 w-5 text-blue-600" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900">Email</p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 break-words">
                       {loading ? 'contact@yourstore.com' : settings.contactEmail || 'contact@yourstore.com'}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
+                <div className="flex items-start sm:items-center gap-3 rounded-xl bg-white p-4 border border-gray-200 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 flex-shrink-0">
                     <Phone className="h-5 w-5 text-blue-600" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900">Phone</p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 break-words">
                       {loading ? '+1 (555) 123-4567' : settings.contactPhone || '+1 (555) 123-4567'}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
+                <div className="flex items-start sm:items-center gap-3 rounded-xl bg-white p-4 border border-gray-200 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 flex-shrink-0">
                     <MapPin className="h-5 w-5 text-blue-600" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900">Address</p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 break-words">
                       {loading ? '123 Business St, City, State 12345' : settings.contactAddress || '123 Business St, City, State 12345'}
                     </p>
                   </div>

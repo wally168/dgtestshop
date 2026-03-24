@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { isSameOrigin, requireAdminSession } from '@/lib/auth'
 
 export async function GET(request: NextRequest) {
   try {
@@ -7,6 +8,12 @@ export async function GET(request: NextRequest) {
     const categoryId = searchParams.get('categoryId')
     const featured = searchParams.get('featured')
     const limit = searchParams.get('limit')
+    const includeInactive = searchParams.get('includeInactive') === 'true'
+
+    if (includeInactive) {
+      const { response } = await requireAdminSession(request)
+      if (response) return response
+    }
     
     const where: any = {}
     
@@ -17,11 +24,15 @@ export async function GET(request: NextRequest) {
     if (featured === 'true') {
       where.featured = true
     }
+    if (!includeInactive) {
+      where.active = true
+    }
 
     const queryOptions: any = {
       where,
       include: {
         category: true,
+        brandRelation: true,
       },
       orderBy: [
         { sortOrder: 'asc' },
@@ -76,7 +87,11 @@ export async function GET(request: NextRequest) {
       reviewCount: (aggMap[p.id]?.reviewCount ?? 0),
     }))
 
-    return NextResponse.json(normalized)
+    const res = NextResponse.json(normalized)
+    if (!includeInactive) {
+      res.headers.set('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600')
+    }
+    return res
   } catch (error) {
     console.error('Error fetching products:', error)
     return NextResponse.json(
@@ -88,6 +103,12 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!isSameOrigin(request)) {
+      return NextResponse.json({ error: '非法来源' }, { status: 403 })
+    }
+    const { response } = await requireAdminSession(request)
+    if (response) return response
+
     const body = await request.json()
     const {
       name,
@@ -102,12 +123,15 @@ export async function POST(request: NextRequest) {
       featured,
       inStock,
       brand,
+      brandId,
       upc,
       publishedAt,
       variants,
       variantImageMap,
       variantOptionImages,
       variantOptionLinks,
+      youtubeUrl,
+      youtubeIndex,
       // 新增字段：前台按钮显示控制
       showBuyOnAmazon,
       showAddToCart,
@@ -152,6 +176,18 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+    const normalizedYoutubeUrl = typeof youtubeUrl === 'string' && youtubeUrl.trim() ? youtubeUrl.trim() : null
+    const normalizedYoutubeIndex = (() => {
+      if (!normalizedYoutubeUrl) return null
+      const raw = typeof youtubeIndex === 'number'
+        ? youtubeIndex
+        : typeof youtubeIndex === 'string'
+          ? parseInt(youtubeIndex, 10)
+          : NaN
+      const fallback = Math.min(1, imageList.length)
+      if (!Number.isFinite(raw)) return fallback
+      return Math.max(0, Math.min(raw, imageList.length))
+    })()
 
     // 生成唯一 slug
     const baseSlug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
@@ -233,14 +269,17 @@ export async function POST(request: NextRequest) {
       price: parseFloat(price),
       originalPrice: originalPrice ? parseFloat(originalPrice) : null,
       images: JSON.stringify(imageList),
+      youtubeUrl: normalizedYoutubeUrl,
+      youtubeIndex: normalizedYoutubeIndex,
       bulletPoints: JSON.stringify(Array.isArray(bulletPoints) ? bulletPoints : []),
       amazonUrl: normalizedAmazonUrl,
-      // 通过关联连接分类，避免类型错误
-      category: { connect: { id: categoryId } },
+      // 直接使用 categoryId 赋值，与 import 接口保持一致
+      categoryId: categoryId,
       featured: featured || false,
       active: inStock !== false,
-      brand: brand ?? null,
-      upc: upc ?? null,
+      brand: brand || null,
+      brandId: brandId || null,
+      upc: upc || null,
       publishedAt: publishedAtDate,
       variants: variantsJson,
       variantImageMap: variantImageMapJson,
@@ -253,9 +292,6 @@ export async function POST(request: NextRequest) {
 
     const product = await db.product.create({
       data: createData,
-      include: {
-        category: true,
-      },
     })
 
     const parseArr = (s: string | null | undefined) => {
@@ -277,10 +313,14 @@ export async function POST(request: NextRequest) {
       variantOptionLinks: parseObj((product as any).variantOptionLinks),
     }
     return NextResponse.json(normalized, { status: 201 })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating product:', error)
+    // 打印更详细的错误信息以便调试
+    if (error.code) console.error('Error code:', error.code)
+    if (error.meta) console.error('Error meta:', error.meta)
+    
     return NextResponse.json(
-      { error: 'Failed to create product' },
+      { error: `Failed to create product: ${error.message || 'Unknown error'}` },
       { status: 500 }
     )
   }

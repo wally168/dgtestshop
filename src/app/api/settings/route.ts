@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { SESSION_COOKIE } from '@/lib/auth'
+import { isSameOrigin, requireAdminSession } from '@/lib/auth'
 import { Prisma } from '@prisma/client'
 
 // 默认设置
@@ -14,6 +14,8 @@ const defaultSettings = {
   contactEmail: 'contact@yourbrand.com',
   contactPhone: '+1 (555) 123-4567',
   contactAddress: '123 Main Street, City, State 12345',
+  messageForwardEmail: '',
+  messageForwardEnabled: 'false',
   socialFacebook: 'https://facebook.com/yourbrand',
   socialFacebookTitle: 'Facebook',
   socialTwitter: 'https://twitter.com/yourbrand',
@@ -94,15 +96,11 @@ export async function GET() {
 
 // PUT - 更新设置（需管理员登录）
 export async function PUT(request: NextRequest) {
-  // 会话校验
-  const token = request.cookies.get(SESSION_COOKIE)?.value
-  if (!token) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isSameOrigin(request)) {
+    return NextResponse.json({ error: '非法来源' }, { status: 403 })
   }
-  const session = await db.session.findUnique({ where: { token } })
-  if (!session || session.expiresAt.getTime() < Date.now()) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const { response } = await requireAdminSession(request)
+  if (response) return response
 
   try {
     const body = await request.json()
